@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/Version-2.6-blue.svg)
+![Version](https://img.shields.io/badge/Version-2.6.1-blue.svg)
 
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
@@ -24,6 +24,10 @@
 2. **📥 资源下载**：支持提取笔记中的高清无水印图片、视频，批量下载时自动归档到**以笔记标题命名的文件夹**。
 3. **🤖 AI 创作**：内置多种写作模版，**支持 AI 自动生成人设与提示词**，快速生成高质量种草笔记。
 4. **📈 AI 分析**：对捕获的数据进行智能总结、趋势分析，或利用 AI 重新分类整理。
+
+**V2.6.1 修复：**
+
+- ✅ **资源提取稳定性**：新增「页面数据直读」策略——脚本拦截页面自身加载笔记的 feed/note API 响应并缓存，「提取资源」时优先直接复用，不再依赖重新抓取页面（小红书 SSR 已不内嵌笔记数据且受风控影响，旧方式易失败）；XHR/Fetch 双通道捕获，文件夹命名兼容 `display_title`。
 
 **V2.6 版本更新：**
 

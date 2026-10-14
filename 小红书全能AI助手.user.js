@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小红书全能AI助手
 // @namespace    http://tampermonkey.net/
-// @version      2.6.0
+// @version      2.6.1
 // @description  采用API拦截技术，支持自动滚动获取全部笔记，生成带xsec_token的永久有效链接，支持导出Excel/CSV/JSON。新增AI创作模块，内置多种写作模版，支持自定义模版和AI生成人设。提升创作效率，助力内容变现！新增excel带图片导出模式，方便直观查看封面图。新增资源下载功能，支持高清图片/视频批量下载。
 // @author       Coriander
 // @icon         data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAx9JREFUWEfNl09MU0EQxn/beFTDDRI41FAMcNGbBw62oPEGid6UULxg1EhEEzExgdBEEzRqlKDxZCHgDZJ6U8TWAyaQGIsHMQLSA0S8VYQT2NXp9tnX0vKnpi2TNH1vd3bmm5lv9+0o0kQ73SXsc7QCx1EcjU9rnOl6O3pXRNAqCjqCIsB6LKQioYh9rbK/6MMnWojFHgElO3KwWyUBBD1q9q3fWvoPgHY1dIHu2a3N3PRVt5ob98naOABdVd+K5nluxnJc5dBe9TU4qHS128lvRzDnOufoH4iyETukihJ9EnSH0i5PAFRj7oH8z0r9UmlXw0fQZrsVWhQRKcFCEepvQo0DcNXrQgeechDtbQAVpbCyBiurqUmqqYSD+2FyOnPyZE50ln7A4vKWCc5egvIyCA3DzV4YeZ00UlEGQ/eN88670HsjOTczZ8bbvXCiDqbC8HkeBkahuhLE5sBICqDdAzh9yjh1n4OlZZgdTxqcDEPfIAw9SI1aMjg1DVrDpe5tAIRewOJ36LyXzIAgv+IFz1ljXN5FJAOjrwwIcd583YwfO2L0JHvW2qqGjKXYnAExJkYfDyYBaGWibmyDGhe0t/z9bikDSMQO4NZlEO5YJTggfHCBf8SUIo0TqQCEPB8C0Ddg6m5xQIj4xAcXu+DLPASHjY5/1BDUDkAyWF6amXjCkcYLW5Sg1gWBZ3C7H6Y+mWdJ48y35LiQ0HvGGLHzIFsJLAJLSSQzssYmmzMg0TVfM9vMqqMYkcwIejEiv59rhliy3URP2H6n3/zXJsbsO+ipz+huCUCQSb2E3eJQRNL+ZsIQS/a1ALQIKDtCxu0i4EUs8GPvk7YEXFPbNrvAmj5ZJ3dB49wSYbTlUIgqANJFzoFfq4aE8izBiC0h49iEmctagszUyevoHvgYFf1zXEwA6PBeuJLVXwUe5pVp2Yyr2HmVaMUW8tYNZXWuI6xrT6IxcbeiHYVtTCT62ZDf1pp5ekB1FaYU2qfmgvGLQWpzKi0adOfxlhxF0ZGxObUiT7RqbjRNoJ0oVZIzINMNy5Eehtg7NvCrSChqz/IfgUZkW/BhLsQAAAAASUVORK5CYII=
@@ -31,6 +31,20 @@
 
   // 全局视频URL存储 - 页面加载时捕获的真实视频链接
   let CACHED_VIDEO_URL = null;
+
+  // 已捕获的笔记卡片数据（来自页面自身加载笔记时的 feed/note API 响应）
+  // key = noteId。页面渲染用的就是这份数据，提取时直接复用最可靠
+  const CACHED_NOTE_CARDS = new Map();
+
+  function cacheNoteCard(note, fallbackId) {
+    if (!note || typeof note !== "object") return;
+    const id = String(note.noteId || note.note_id || fallbackId || "");
+    if (!id) return;
+    if (CACHED_NOTE_CARDS.size >= 20) {
+      CACHED_NOTE_CARDS.delete(CACHED_NOTE_CARDS.keys().next().value);
+    }
+    CACHED_NOTE_CARDS.set(id, note);
+  }
 
   // ==========================================
   // 0.1 XHR 拦截 - 捕获实际视频流URL
@@ -120,8 +134,12 @@
                 if (resp.data.items) {
                   resp.data.items.forEach((item) => {
                     const note = item.note_card || item.note || item;
+                    cacheNoteCard(note, item.id);
                     processNote(note);
                   });
+                }
+                if (resp.data.note) {
+                  cacheNoteCard(resp.data.note);
                 }
               }
             }
@@ -145,6 +163,39 @@
       if (input instanceof Request) {
         url = input.url;
       }
+      const result = originalFetch.apply(this, arguments);
+
+      // 【新增】捕获页面通过 fetch 加载的笔记数据（与 XHR 拦截同源）
+      if (
+        url &&
+        typeof url === "string" &&
+        url.includes("/api/sns/") &&
+        (url.includes("/feed") || url.includes("/note"))
+      ) {
+        result
+          .then((res) => {
+            try {
+              res
+                .clone()
+                .text()
+                .then((t) => {
+                  try {
+                    const resp = JSON.parse(t);
+                    if (resp && resp.data) {
+                      (resp.data.items || []).forEach((item) => {
+                        const note = item.note_card || item.note || item;
+                        cacheNoteCard(note, item.id);
+                      });
+                      if (resp.data.note) cacheNoteCard(resp.data.note);
+                    }
+                  } catch (e) {}
+                })
+                .catch(() => {});
+            } catch (e) {}
+          })
+          .catch(() => {});
+      }
+
       if (
         url &&
         typeof url === "string" &&
@@ -155,7 +206,7 @@
         CACHED_VIDEO_URL = url;
         console.log("[XHS-Stream-Fetch] 捕获无水印流地址:", url);
       }
-      return originalFetch.apply(this, arguments);
+      return result;
     };
   })();
 
@@ -2927,23 +2978,33 @@
 
     try {
       let noteData = null;
-      // 策略: 优先 fetch 页面源码，正则提取 state，这是最稳妥的方式（兼容性最好）
-      // 直接读取 window 对象可能会因沙箱隔离失败
 
       let targetUrl = url;
-      // 处理短链或非详情页URL (略，假设用户输入正确详情页或在详情页操作)
 
-      const html = await fetchHtml(targetUrl);
-      noteData = extractNoteFromHtml(html);
+      // 策略0（最优）: 页面自身加载笔记时已通过签名 API 获取过完整数据，
+      // 直接复用，避免重新请求页面（SSR 现已不内嵌笔记数据，且受风控影响）
+      const preId = getNoteIdFromUrl(targetUrl);
+      if (preId && CACHED_NOTE_CARDS.has(preId)) {
+        noteData = CACHED_NOTE_CARDS.get(preId);
+        console.log("[资源下载] 命中页面已加载的笔记数据:", preId);
+      }
 
-      // 如果 HTML 中没有 __INITIAL_STATE__，尝试使用 noteId 调用接口兜底
+      // 策略1: fetch 页面源码，正则提取 state（兼容性兜底）
+      if (!noteData) {
+        const html = await fetchHtml(targetUrl);
+        noteData = extractNoteFromHtml(html);
+      }
+
+      // 策略2: 使用 noteId 调用接口兜底
       if (!noteData) {
         const noteId = getNoteIdFromUrl(targetUrl);
         noteData = await fetchNoteDetailViaApi(noteId);
       }
 
       if (!noteData)
-        throw new Error("无法提取笔记数据，请确认链接有效且为公开笔记");
+        throw new Error(
+          "无法提取笔记数据，请确认链接有效且为公开笔记。提示：请先在浏览器中正常打开该笔记页面，再点击提取资源",
+        );
 
       // 补充步骤: 如果是当前页，尝试从 DOM 提取额外视频链接 (参考 Demo)
       if (
@@ -3365,7 +3426,7 @@
     const note = CURRENT_NOTE_RAW
       ? CURRENT_NOTE_RAW.note || CURRENT_NOTE_RAW
       : {};
-    const byTitle = sanitizeFolderName(note.title);
+    const byTitle = sanitizeFolderName(note.title || note.display_title);
     if (byTitle) return byTitle;
     const byId = sanitizeFolderName(note.noteId || note.id);
     return byId || "小红书资源";
